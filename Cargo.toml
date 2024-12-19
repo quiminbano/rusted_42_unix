@@ -3,4 +3,5 @@
 members = [
 	"rusted_minitalk",
 	"rusted_pipex",
+	"rusted_philo",
 ]
