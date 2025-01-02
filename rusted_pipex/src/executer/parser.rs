@@ -33,6 +33,9 @@ impl ShellParser {
                 .push(parser_collection.string_to_push.clone());
             parser_collection.string_to_push.clear();
         }
+        if ShellParser::is_whitespaces_only(coming_input) {
+            parser_collection.result.push(coming_input.clone());
+        }
         parser_collection.result
     }
 
@@ -105,5 +108,23 @@ impl ShellParser {
                 self.string_to_push.push(char_to_analyze);
             }
         };
+    }
+
+    pub fn is_whitespaces_only(string: &String) -> bool {
+        let mut iterable_char: Peekable<Chars<'_>>;
+        let mut ammount_whitespaces: usize;
+
+        iterable_char = string.chars().peekable();
+        ammount_whitespaces = 0;
+        while let Some(&char_to_analyze) = iterable_char.peek() {
+            if char_to_analyze == ' ' {
+                ammount_whitespaces += 1;
+            }
+            iterable_char.next();
+        }
+        if string.len() == ammount_whitespaces {
+            return true;
+        }
+        false
     }
 }
