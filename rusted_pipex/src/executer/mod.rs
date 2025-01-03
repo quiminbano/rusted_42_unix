@@ -4,7 +4,7 @@ use std::fs::File;
 use std::io::{self, Lines, StdinLock, Write};
 use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{Child, ChildStdout, Command, ExitStatus, Stdio};
 
 pub struct Executer<'a> {
     input: &'a Vec<String>,
@@ -131,31 +131,53 @@ impl<'a> Executer<'a> {
         self.infile_content = infile_content;
     }
 
-    fn fill_here_doc(&self, raw_delimiter: &String) -> Result<String, String> {
-        let delimiter: String;
+    fn fill_here_doc(&self, delimiter: &String) -> Result<String, String> {
         let mut heredoc_temp: String;
         let mut line_temp: String;
         let stdin: io::Stdin;
+        let mut eof_pressed: bool;
         let mut lines: Lines<StdinLock<'static>>;
 
+        self.print_prompt("rusted_pipex heredoc> ");
+        eof_pressed = true;
         heredoc_temp = String::new();
-        delimiter = raw_delimiter.to_owned() + "\n";
         stdin = io::stdin();
         lines = stdin.lines();
         while let Some(result) = lines.next() {
-            println!("rusted_pipex heredoc> ");
             match result {
                 Ok(line) => line_temp = line,
                 Err(_) => {
                     return Err("Error processing here_doc".to_owned());
                 }
             };
-            if line_temp == delimiter {
+            if line_temp == delimiter.as_str() {
+                eof_pressed = false;
                 break;
             }
             heredoc_temp += line_temp.as_str();
+            heredoc_temp += "\n";
+            self.print_prompt("rusted_pipex heredoc> ");
+        }
+        if eof_pressed {
+            println!("");
+        } else {
+            self.flush_stdout("Error trying to flush stdout");
         }
         Ok(heredoc_temp)
+    }
+
+    fn print_prompt(&self, promp: &'a str) {
+        print!("{}", promp);
+        self.flush_stdout("Error trying to flush stdout");
+    }
+
+    fn flush_stdout(&self, error_message: &'a str) {
+        let mut stdout: io::Stdout;
+
+        stdout = io::stdout();
+        if let Err(error) = stdout.flush() {
+            self.print_error_message(&error_message.to_owned(), &error.to_string());
+        }
     }
 
     fn classify_commands_and_arguments(&mut self, mut arguments: Vec<Vec<String>>) {
@@ -174,10 +196,11 @@ impl<'a> Executer<'a> {
         let mut current_command: Command;
         let mut current_child: Result<Child, io::Error>;
         let mut index: usize;
+        let mut stdout_prev_command: Option<ChildStdout>;
 
         index = 0;
         self.print_files_error();
-
+        stdout_prev_command = None;
         while index < self.ammout_commands {
             if (index == 0 && self.infile_error)
                 || (index == self.ammout_commands - 1 && self.outfile_error)
@@ -190,13 +213,15 @@ impl<'a> Executer<'a> {
             if self.arguments_commands[index].len() != 0 {
                 current_command.args(&self.arguments_commands[index]);
             }
-            self.handle_redirections(&mut current_command, index);
+            stdout_prev_command =
+                self.handle_redirections(&mut current_command, index, stdout_prev_command);
             current_child = current_command.spawn();
             match current_child {
                 Ok(mut child) => {
                     if index == 0 && self.has_heredoc {
                         self.fill_stdin_heredoc(&mut child);
                     }
+                    (child, stdout_prev_command) = self.capture_stdout_prev_command(child);
                     self.execution_commands.push(Some(child));
                 }
                 Err(message) => {
@@ -206,6 +231,17 @@ impl<'a> Executer<'a> {
             };
             index += 1;
         }
+    }
+
+    fn capture_stdout_prev_command(&self, mut child: Child) -> (Child, Option<ChildStdout>) {
+        let stdout_prev_command: ChildStdout;
+
+        if let Some(stdout_command) = child.stdout.take() {
+            stdout_prev_command = stdout_command;
+        } else {
+            return (child, None);
+        }
+        return (child, Some(stdout_prev_command));
     }
 
     fn print_files_error(&mut self) {
@@ -235,7 +271,12 @@ impl<'a> Executer<'a> {
             eprintln!("rusted_pipex: {}: {}", argument, trimmed_message);
         }
     }
-    fn handle_redirections(&self, command: &mut Command, index: usize) {
+    fn handle_redirections(
+        &self,
+        command: &mut Command,
+        index: usize,
+        mut stdout_prev: Option<ChildStdout>,
+    ) -> Option<ChildStdout> {
         if index == 1 && self.infile_error {
             command.stdin(Stdio::null());
         } else if index == 0 && !self.infile_error && !self.has_heredoc {
@@ -251,8 +292,14 @@ impl<'a> Executer<'a> {
                     }
                 };
             }
-        } else {
+        } else if index == 0 && !self.infile_error && self.has_heredoc {
             command.stdin(Stdio::piped());
+        } else {
+            if let Some(stdout) = stdout_prev {
+                command.stdin(stdout);
+            } else {
+                command.stdin(Stdio::null());
+            }
         }
         if index == self.ammout_commands - 2 && self.outfile_error {
             command.stdout(Stdio::null());
@@ -272,6 +319,8 @@ impl<'a> Executer<'a> {
         } else {
             command.stdout(Stdio::piped());
         }
+        stdout_prev = None;
+        return stdout_prev;
     }
 
     fn fill_stdin_heredoc(&self, child: &mut Child) {
