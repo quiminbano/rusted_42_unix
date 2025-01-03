@@ -403,7 +403,7 @@ impl<'a> Executer<'a> {
             if let Some(exit_code) = exit_status.code() {
                 self.exit_status = exit_code;
             } else {
-                self.handle_signals(exit_status, &self.main_commands[index]);
+                self.exit_status = self.handle_signals(exit_status, &self.main_commands[index]);
             }
         }
     }
